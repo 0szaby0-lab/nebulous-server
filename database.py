@@ -72,6 +72,13 @@ async def init_db():
     global motor_client, db, players_col, clans_col
     if MONGODB_URI:
         try:
+            try:
+                import dns.resolver
+                dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
+                dns.resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']
+            except Exception:
+                pass
+
             import motor.motor_asyncio
             logger.info("Connecting to MongoDB Atlas...")
             motor_client = motor.motor_asyncio.AsyncIOMotorClient(

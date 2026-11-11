@@ -28,6 +28,13 @@ players_col = None
 
 if MONGODB_URI:
     try:
+        try:
+            import dns.resolver
+            dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
+            dns.resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']
+        except Exception:
+            pass
+
         import pymongo
         print(f"[*] Connecting to MongoDB: {MONGODB_URI[:25]}...")
         mongo_client = pymongo.MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
