@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: nebulous-master-server
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.8
+      - key: MONGODB_URI
+        sync: false # Set this in Render Dashboard -> Environment
+      - key: DB_NAME
+        value: nebulous_db
+      - key: SERVER_PUBLIC_IP
+        value: 127.0.0.1
+      - key: SERVER_PUBLIC_UDP_PORT
+        value: 25000
