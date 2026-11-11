@@ -86,7 +86,18 @@ async def root():
 async def handle_login(request: Request):
     params = await get_request_params(request)
     auth_token = params.get("authToken", "")
-    username = params.get("UserName") or params.get("Name") or "NebulousVIP"
+    username = params.get("UserName") or params.get("Name")
+
+    if not username:
+        if db.players_col is not None:
+            try:
+                existing = await db.players_col.find_one()
+                if existing and existing.get("username"):
+                    username = existing.get("username")
+            except Exception:
+                pass
+        if not username:
+            username = "Szaby"
 
     logger.info(f"Login request from user '{username}' (Token: {auth_token[:15]}...)")
 
@@ -106,6 +117,18 @@ async def handle_login(request: Request):
         "BanUntilUtc": None
     }
     return JSONResponse(content=response_data)
+
+
+@app.post("/api/account/SetName")
+async def handle_set_name(request: Request):
+    params = await get_request_params(request)
+    ticket = params.get("Ticket")
+    new_name = params.get("Name")
+    player = await db.get_player_by_ticket(ticket)
+    if player and new_name:
+        await db.update_player(player["account_id"], {"username": new_name})
+        return JSONResponse(content={"status": "OK", "UserName": new_name, "Coins": int(player["coins"])})
+    return JSONResponse(content={"status": "OK"})
 
 
 # ==============================================================================
