@@ -56,7 +56,7 @@ def get_default_player(account_id: int, username: str = "Player"):
     return {
         "account_id": account_id,
         "username": username,
-        "ticket": f"ticket_{account_id}_{int(datetime.now(timezone.utc).timestamp())}",
+        "ticket": f"{account_id},ticket_{account_id}_{int(datetime.now(timezone.utc).timestamp())}",
         "coins": 999999999,          # Max plasma
         "clan_coins": 999999999,
         "xp": 15000000,              # High level XP
@@ -131,6 +131,14 @@ def db_get_or_create_player(username="Player", account_id=None):
 def db_get_player_by_ticket(ticket):
     if not ticket:
         return None
+    if "," in str(ticket):
+        try:
+            aid = int(str(ticket).split(",")[0])
+            p = db_get_player_by_id(aid)
+            if p:
+                return p
+        except Exception:
+            pass
     if players_col is not None:
         try:
             return players_col.find_one({"ticket": ticket})
@@ -241,11 +249,13 @@ class NebulousHandler(BaseHTTPRequestHandler):
 
         # 1. Login
         if endpoint in ["GoogleLogin", "FacebookLogin"]:
-            uname = params.get("UserName") or params.get("Name") or "NebulousVIP"
+            uname = params.get("UserName") or params.get("Name") or "Szaby"
             p = db_get_or_create_player(uname)
             self._send_json({
                 "Ticket": p["ticket"],
                 "UserName": p["username"],
+                "AccountID": int(p["account_id"]),
+                "accountID": int(p["account_id"]),
                 "Coins": int(p["coins"]),
                 "profileFonts": p.get("profile_fonts", [0]),
                 "AccountColors": p.get("account_colors", [1, 2, 3]),
@@ -274,9 +284,7 @@ class NebulousHandler(BaseHTTPRequestHandler):
             self._send_json({
                 "ServerAddressOverrides": {
                     "EU": SERVER_PUBLIC_IP,
-                    "EUROPE": SERVER_PUBLIC_IP,
-                    "US": SERVER_PUBLIC_IP,
-                    "ASIA": SERVER_PUBLIC_IP
+                    "EUROPE": SERVER_PUBLIC_IP
                 },
                 "ClanAllies": [],
                 "ClanEnemies": [],

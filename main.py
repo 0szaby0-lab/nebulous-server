@@ -200,18 +200,7 @@ async def handle_client_config(request: Request):
     return JSONResponse(content={
         "ServerAddressOverrides": {
             "EU": SERVER_PUBLIC_IP,
-            "EUROPE": SERVER_PUBLIC_IP,
-            "US_EAST": SERVER_PUBLIC_IP,
-            "US_WEST": SERVER_PUBLIC_IP,
-            "EAST_ASIA": SERVER_PUBLIC_IP,
-            "SOUTH_ASIA": SERVER_PUBLIC_IP,
-            "SOUTH_AMERICA": SERVER_PUBLIC_IP,
-            "AUSTRALIA": SERVER_PUBLIC_IP,
-            "JAPAN": SERVER_PUBLIC_IP,
-            "MIDDLE_EAST": SERVER_PUBLIC_IP,
-            "SOUTH_AFRICA": SERVER_PUBLIC_IP,
-            "RUSSIA": SERVER_PUBLIC_IP,
-            "INDIA": SERVER_PUBLIC_IP
+            "EUROPE": SERVER_PUBLIC_IP
         },
         "ClanAllies": [],
         "ClanEnemies": [],
