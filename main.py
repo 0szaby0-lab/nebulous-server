@@ -1,5 +1,7 @@
 import os
 import base64
+import struct
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any, List
@@ -19,11 +21,43 @@ SERVER_PUBLIC_UDP_PORT = int(os.environ.get("SERVER_PUBLIC_UDP_PORT", 25000))
 APP_DOMAIN = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "localhost")
 
 
+class NebulousUDPServerProtocol(asyncio.DatagramProtocol):
+    def connection_made(self, transport):
+        self.transport = transport
+        logger.info(f"Nebulous European UDP Game Node active on port {SERVER_PUBLIC_UDP_PORT}")
+
+    def datagram_received(self, data, addr):
+        if not data:
+            return
+        try:
+            # Nebulous connect handshake responder
+            # CONNECT_RESULT_2 (packet_type=1)
+            # Struct: 1 (int8), client_id (int32), result=0 (int8: SUCCESS),
+            # public_id=100 (int32), private_id=100 (int32), game_id=1 (int32),
+            # ban_length=0 (int32), ad_stuff=0.0 (float32), split_multiplier=1 (int8)
+            resp = struct.pack(">BiBiiiifb", 1, 1, 0, 100, 100, 1, 0, 0.0, 1)
+            self.transport.sendto(resp, addr)
+        except Exception as e:
+            logger.debug(f"UDP datagram handling error: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing Nebulous Master API Server...")
     await db.init_db()
+    loop = asyncio.get_running_loop()
+    udp_transport = None
+    try:
+        udp_transport, _ = await loop.create_datagram_endpoint(
+            lambda: NebulousUDPServerProtocol(),
+            local_addr=("0.0.0.0", SERVER_PUBLIC_UDP_PORT)
+        )
+        logger.info(f"European UDP Game Node started successfully on 0.0.0.0:{SERVER_PUBLIC_UDP_PORT}")
+    except Exception as e:
+        logger.warning(f"Could not bind UDP game port {SERVER_PUBLIC_UDP_PORT}: {e}")
     yield
+    if udp_transport:
+        udp_transport.close()
     logger.info("Shutting down Nebulous Server...")
 
 
@@ -106,6 +140,8 @@ async def handle_login(request: Request):
     response_data = {
         "Ticket": player["ticket"],
         "UserName": player["username"],
+        "AccountID": int(player["account_id"]),
+        "accountID": int(player["account_id"]),
         "Coins": int(player["coins"]),
         "profileFonts": player.get("profile_fonts", [0]),
         "AccountColors": player.get("account_colors", [1, 2, 3]),
@@ -165,9 +201,17 @@ async def handle_client_config(request: Request):
         "ServerAddressOverrides": {
             "EU": SERVER_PUBLIC_IP,
             "EUROPE": SERVER_PUBLIC_IP,
-            "US": SERVER_PUBLIC_IP,
-            "ASIA": SERVER_PUBLIC_IP,
-            "BRAZIL": SERVER_PUBLIC_IP
+            "US_EAST": SERVER_PUBLIC_IP,
+            "US_WEST": SERVER_PUBLIC_IP,
+            "EAST_ASIA": SERVER_PUBLIC_IP,
+            "SOUTH_ASIA": SERVER_PUBLIC_IP,
+            "SOUTH_AMERICA": SERVER_PUBLIC_IP,
+            "AUSTRALIA": SERVER_PUBLIC_IP,
+            "JAPAN": SERVER_PUBLIC_IP,
+            "MIDDLE_EAST": SERVER_PUBLIC_IP,
+            "SOUTH_AFRICA": SERVER_PUBLIC_IP,
+            "RUSSIA": SERVER_PUBLIC_IP,
+            "INDIA": SERVER_PUBLIC_IP
         },
         "ClanAllies": [],
         "ClanEnemies": [],
@@ -211,10 +255,13 @@ async def handle_get_profile(request: Request):
         ticket = params.get("Ticket")
         player = await db.get_player_by_ticket(ticket)
     if not player:
-        player = await db.get_or_create_player("Player")
+        player = await db.get_or_create_player("Szaby")
 
     return JSONResponse(content={
+        "accountID": int(player["account_id"]),
+        "AccountId": int(player["account_id"]),
         "plasma": int(player["coins"]),
+        "Coins": int(player["coins"]),
         "profile": player.get("profile_bio", "Nebulous Custom EU Server Player"),
         "profileColors": player.get("account_colors", [1, 2, 3]),
         "profileFonts": player.get("profile_fonts", [0]),

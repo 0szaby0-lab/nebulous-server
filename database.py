@@ -24,7 +24,7 @@ def get_default_player(account_id: int, username: str = "Player") -> Dict[str, A
     return {
         "account_id": account_id,
         "username": username,
-        "ticket": f"ticket_{account_id}_{int(datetime.now(timezone.utc).timestamp())}",
+        "ticket": f"{account_id},ticket_{account_id}_{int(datetime.now(timezone.utc).timestamp())}",
         "coins": 999999999,      # Plasma / coins (free / maxed)
         "clan_coins": 999999999,
         "xp": 15000000,          # High level XP
@@ -116,6 +116,10 @@ async def get_or_create_player(username: str = "Player", account_id: Optional[in
 
             player = await players_col.find_one(query)
             if player:
+                if "," not in str(player.get("ticket", "")):
+                    new_ticket = f"{player['account_id']},ticket_{player['account_id']}_{int(datetime.now(timezone.utc).timestamp())}"
+                    await players_col.update_one({"account_id": player["account_id"]}, {"$set": {"ticket": new_ticket}})
+                    player["ticket"] = new_ticket
                 return player
 
             # Generate new account_id
@@ -133,6 +137,8 @@ async def get_or_create_player(username: str = "Player", account_id: Optional[in
 
     for p in _memory_players.values():
         if p["username"] == username:
+            if "," not in str(p.get("ticket", "")):
+                p["ticket"] = f"{p['account_id']},ticket_{p['account_id']}_{int(datetime.now(timezone.utc).timestamp())}"
             return p
 
     new_id = account_id if account_id else _next_account_id
@@ -154,6 +160,15 @@ async def get_player_by_id(account_id: int) -> Optional[Dict[str, Any]]:
 async def get_player_by_ticket(ticket: str) -> Optional[Dict[str, Any]]:
     if not ticket:
         return None
+    # If ticket contains comma, first part is account_id!
+    if "," in str(ticket):
+        try:
+            aid = int(str(ticket).split(",")[0])
+            p = await get_player_by_id(aid)
+            if p:
+                return p
+        except Exception:
+            pass
     if players_col is not None:
         try:
             player = await players_col.find_one({"ticket": ticket})
