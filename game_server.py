@@ -76,14 +76,23 @@ def build_custom_rooms(client_id: int, offset: int = 0) -> bytes:
     bio = io.BytesIO()
     bio.write(struct.pack(">Bi", 0x2d, client_id))
     if offset == 0:
-        bio.write(struct.pack(">B", 2)) # 2 rooms
-        # Room 1: FFA
-        bio.write(struct.pack(">iBBBh", 1, 1, 0, 20, 1)) # id=1, mode=1, flags=0, max=20, cur=1
-        # Room 2: Teams
-        bio.write(struct.pack(">iBBBh", 2, 2, 0, 20, 1)) # id=2, mode=2, flags=0, max=20, cur=1
+        bio.write(struct.pack(">B", 4)) # 4 rooms
+        # Room 1: FFA (mode=1, flags=0, region_diff=2 [EU], cur=1)
+        bio.write(struct.pack(">iBBBh", 1, 1, 0, 2, 1))
+        # Room 2: Teams (mode=2, flags=0, region_diff=2 [EU], cur=1)
+        bio.write(struct.pack(">iBBBh", 2, 2, 0, 2, 1))
+        # Room 3: Experimental (mode=3, flags=0, region_diff=2 [EU], cur=1)
+        bio.write(struct.pack(">iBBBh", 3, 3, 0, 2, 1))
+        # Room 4: Mayhem (mode=4, flags=0, region_diff=2 [EU], cur=1)
+        bio.write(struct.pack(">iBBBh", 4, 4, 0, 2, 1))
     else:
         bio.write(struct.pack(">B", 0)) # No more rooms
     return bio.getvalue()
+
+
+def build_room_query_response(client_id: int, token: int = 1) -> bytes:
+    # 0x2c (Lob/b;): byte 0x2c, int client_id, byte count, count * int room_id, int token
+    return struct.pack(">BiBiiiii", 0x2c, client_id, 4, 1, 2, 3, 4, token)
 
 
 def build_clan_info(client_id: int) -> bytes:
@@ -184,18 +193,35 @@ class NebulousUDPServerProtocol(asyncio.DatagramProtocol):
         if pkt_type == 0x21:
             offset = 0
             client_id = 10001
+            if len(data) >= 5:
+                client_id = struct.unpack(">i", data[1:5])[0]
+            elif addr in self.sessions:
+                client_id = self.sessions[addr].client_id
+            
             if addr in self.sessions:
                 self.sessions[addr].last_seen = time.time()
-                client_id = self.sessions[addr].client_id
-            elif len(data) >= 5:
-                client_id = struct.unpack(">i", data[1:5])[0]
-            
+
             if len(data) >= 7:
                 offset = struct.unpack(">h", data[5:7])[0]
 
             resp = build_custom_rooms(client_id, offset)
             self.transport.sendto(resp, addr)
-            logger.info(f"Responded to 0x21 with room list (0x2d) to {addr} (offset={offset})")
+            logger.info(f"RECV 0x21: {data.hex()} -> Responded (0x2d, 4 EU rooms) to {addr} (client_id={client_id}, offset={offset})")
+            return
+
+        # 4b. ROOM QUERY (0x2c = 44)
+        if pkt_type == 0x2C:
+            client_id = 10001
+            token = 1
+            if len(data) >= 5:
+                client_id = struct.unpack(">i", data[1:5])[0]
+            if len(data) >= 10:
+                token = struct.unpack(">i", data[-4:])[0]
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+            resp = build_room_query_response(client_id, token)
+            self.transport.sendto(resp, addr)
+            logger.info(f"RECV 0x2c -> Responded with 0x2c room query to {addr} (client_id={client_id})")
             return
 
         # 5. TEAM ROOMS / CLAN WAR INFO (0x42 = 66)

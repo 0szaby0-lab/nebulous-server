@@ -22,41 +22,88 @@ APP_DOMAIN = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "localhost")
 
 
 def build_game_config(client_id: int) -> bytes:
-    import io
     bio = io.BytesIO()
-    # 0x2b (43) GAME_CONFIG
+    # byte 0: packet_type = 0x2b (43), bytes 1..4: client_id
     bio.write(struct.pack(">Bi", 0x2b, client_id))
-    bio.write(struct.pack(">i", 1)) # room ID
-    bio.write(b"\x00") # d = False
-    bio.write(b"\x00") # p = False
-    bio.write(b"\x01") # s = True
-    bio.write(struct.pack(">i", 1)) # t
-    bio.write(struct.pack(">i", 0)) # u
-    bio.write(b"\x00") # v = False
-    bio.write(b"\x01") # y = True
-    bio.write(b"\x00") # z
-    bio.write(struct.pack(">i", 0)) # A
-    bio.write(b"\x01") # B = True
-    bio.write(struct.pack(">B", 1)) # C
-    bio.write(struct.pack(">i", 0)) # D
-    bio.write(b"\x00") # E = False (skip hashsets)
-    bio.write(b"\x00") # S = False
-    bio.write(b"\x00") # U = False
-    bio.write(b"\x00") # W = False
-    return bio.getvalue()
-
-
-def build_game_update(seq: int) -> bytes:
-    import io
-    bio = io.BytesIO()
-    bio.write(struct.pack(">B", 0x16))
-    bio.write(struct.pack(">BB", seq & 0xFF, (seq >> 8) & 0xFF))
-    bio.write(struct.pack(">f", 1.0))
-    bio.write(b"\x00")
-    bio.write(struct.pack(">B", 0))
-    bio.write(b"\x80\x80")
+    # int c (room / config ID = 1)
+    bio.write(struct.pack(">i", 1))
+    # 10 booleans (d, p, s, v, y, B, E, S, U, W) all False
     bio.write(b"\x00" * 10)
     return bio.getvalue()
+
+
+def build_game_state(client_id: int) -> bytes:
+    bio = io.BytesIO()
+    # 0x4b (Lob/n0;)
+    bio.write(struct.pack(">Bi", 0x4b, client_id))
+    # g (int = 1, must match f=1 in ConnectResult2)
+    bio.write(struct.pack(">i", 1))
+    # zoom / scale (float = 1000.0)
+    bio.write(struct.pack(">f", 1000.0))
+    # h (byte: players count = 0)
+    bio.write(b"\x00")
+    # i (byte: blobs count = 0)
+    bio.write(b"\x00")
+    # k (short = 0)
+    bio.write(struct.pack(">h", 0))
+    # j (short = 0)
+    bio.write(struct.pack(">h", 0))
+    # m (byte: food count = 0)
+    bio.write(b"\x00")
+    # l (byte: virus count = 0)
+    bio.write(b"\x00")
+    return bio.getvalue()
+
+
+def build_leaderboard(client_id: int) -> bytes:
+    bio = io.BytesIO()
+    # 0x1f (Lob/x0;)
+    bio.write(struct.pack(">Bi", 0x1f, client_id))
+    # scale (float = 1.0)
+    bio.write(struct.pack(">f", 1.0))
+    # g (byte: count = 0)
+    bio.write(b"\x00")
+    # i (int = 0)
+    bio.write(struct.pack(">i", 0))
+    return bio.getvalue()
+
+
+def build_custom_rooms(client_id: int, offset: int = 0) -> bytes:
+    bio = io.BytesIO()
+    bio.write(struct.pack(">Bi", 0x2d, client_id))
+    if offset == 0:
+        bio.write(struct.pack(">B", 4)) # 4 rooms
+        # Room 1: FFA (mode=1, flags=0, region_diff=2 [EU], cur=1)
+        bio.write(struct.pack(">iBBBh", 1, 1, 0, 2, 1))
+        # Room 2: Teams (mode=2, flags=0, region_diff=2 [EU], cur=1)
+        bio.write(struct.pack(">iBBBh", 2, 2, 0, 2, 1))
+        # Room 3: Experimental (mode=3, flags=0, region_diff=2 [EU], cur=1)
+        bio.write(struct.pack(">iBBBh", 3, 3, 0, 2, 1))
+        # Room 4: Mayhem (mode=4, flags=0, region_diff=2 [EU], cur=1)
+        bio.write(struct.pack(">iBBBh", 4, 4, 0, 2, 1))
+    else:
+        bio.write(struct.pack(">B", 0)) # No more rooms
+    return bio.getvalue()
+
+
+def build_room_query_response(client_id: int, token: int = 1) -> bytes:
+    return struct.pack(">BiBiiiii", 0x2c, client_id, 4, 1, 2, 3, 4, token)
+
+
+def build_clan_info(client_id: int) -> bytes:
+    bio = io.BytesIO()
+    bio.write(struct.pack(">Bi", 0x43, client_id))
+    bio.write(b"\x00\x00") # empty string UTF
+    bio.write(struct.pack(">iBB", 0, 0, 0)) # h=0, byte=0, count=0
+    return bio.getvalue()
+
+
+def build_tournament_list(client_id: int) -> bytes:
+    return struct.pack(">BiBi", 0x18, client_id, 0, 0)
+
+
+def build_clan_status(client_id: int) -> bytes:
+    return struct.pack(">Biib", 0x12, client_id, -1, 0)
 
 
 class ClientSession:
@@ -66,6 +113,7 @@ class ClientSession:
         import time
         self.last_seen = time.time()
         self.seq = 0
+        self.active = True
 
 
 class NebulousUDPServerProtocol(asyncio.DatagramProtocol):
@@ -106,7 +154,8 @@ class NebulousUDPServerProtocol(asyncio.DatagramProtocol):
                     client_id = struct.unpack(">i", data[cid_offset:cid_offset + 4])[0]
 
                 logger.info(f"Connect handshake from {addr} (client_id={client_id})")
-                self.sessions[addr] = ClientSession(addr, client_id)
+                session = ClientSession(addr, client_id)
+                self.sessions[addr] = session
 
                 # ConnectResult2 (SUCCESS)
                 resp = struct.pack(">BiBiiiifb", 1, client_id, 0, 100, 100, 1, 0, 1.0, 1)
@@ -115,18 +164,109 @@ class NebulousUDPServerProtocol(asyncio.DatagramProtocol):
                 # GameConfig (0x2b)
                 config_pkt = build_game_config(client_id)
                 self.transport.sendto(config_pkt, addr)
-                logger.info(f"Sent ConnectResult2 & GameConfig to {addr}")
+
+                # Initial GameState (0x4b)
+                state_pkt = build_game_state(client_id)
+                self.transport.sendto(state_pkt, addr)
+
+                # Initial Leaderboard (0x1f)
+                lb_pkt = build_leaderboard(client_id)
+                self.transport.sendto(lb_pkt, addr)
+                logger.info(f"Sent ConnectResult2, GameConfig, GameState & Leaderboard to {addr}")
             except Exception as e:
                 logger.error(f"Connect packet error: {e}")
             return
 
-        # 4. KEEP_ALIVE (0x7f)
+        # 4. CUSTOM ROOMS REQUEST (0x21)
+        if pkt_type == 0x21:
+            offset = 0
+            client_id = 10001
+            if len(data) >= 5:
+                client_id = struct.unpack(">i", data[1:5])[0]
+            elif addr in self.sessions:
+                client_id = self.sessions[addr].client_id
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+            if len(data) >= 7:
+                offset = struct.unpack(">h", data[5:7])[0]
+            resp = build_custom_rooms(client_id, offset)
+            self.transport.sendto(resp, addr)
+            logger.info(f"Responded to 0x21 with room list (0x2d) to {addr} (client_id={client_id}, offset={offset})")
+            return
+
+        # 4b. ROOM QUERY (0x2c)
+        if pkt_type == 0x2C:
+            client_id = 10001
+            token = 1
+            if len(data) >= 5:
+                client_id = struct.unpack(">i", data[1:5])[0]
+            if len(data) >= 10:
+                token = struct.unpack(">i", data[-4:])[0]
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+            resp = build_room_query_response(client_id, token)
+            self.transport.sendto(resp, addr)
+            return
+
+        # 5. TEAM ROOMS / CLAN WAR INFO (0x42)
+        if pkt_type == 0x42:
+            client_id = 10001
+            if len(data) >= 5:
+                client_id = struct.unpack(">i", data[1:5])[0]
+            elif addr in self.sessions:
+                client_id = self.sessions[addr].client_id
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+            resp = build_clan_info(client_id)
+            self.transport.sendto(resp, addr)
+            return
+
+        # 6. TOURNAMENT LIST (0x17)
+        if pkt_type == 0x17:
+            client_id = 10001
+            if len(data) >= 5:
+                client_id = struct.unpack(">i", data[1:5])[0]
+            elif addr in self.sessions:
+                client_id = self.sessions[addr].client_id
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+            resp = build_tournament_list(client_id)
+            self.transport.sendto(resp, addr)
+            return
+
+        # 7. CLAN STATUS (0x11)
+        if pkt_type == 0x11:
+            client_id = 10001
+            if len(data) >= 5:
+                client_id = struct.unpack(">i", data[1:5])[0]
+            elif addr in self.sessions:
+                client_id = self.sessions[addr].client_id
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+            resp = build_clan_status(client_id)
+            self.transport.sendto(resp, addr)
+            return
+
+        # 8. PING KEEPALIVE (0x07)
+        if pkt_type == 0x07:
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+            self.transport.sendto(data, addr)
+            return
+
+        # 9. KEEP_ALIVE (0x7f)
         if pkt_type == 0x7F:
             if addr in self.sessions:
                 self.sessions[addr].last_seen = time.time()
             return
 
-        # 5. Other game packets
+        # 10. SPAWN REQUEST (0x1d)
+        if pkt_type == 0x1D:
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+            return
+
+        # 11. PLAYER INPUT (0x02)
         if addr in self.sessions:
             self.sessions[addr].last_seen = time.time()
 
@@ -141,8 +281,8 @@ class NebulousUDPServerProtocol(asyncio.DatagramProtocol):
                     if now - session.last_seen > 30.0:
                         inactive.append(addr)
                         continue
-                    session.seq = (session.seq + 1) & 0xFFFF
-                    pkt = build_game_update(session.seq)
+                    session.seq = (session.seq + 1) & 0x7FFFFFFF
+                    pkt = build_game_state(session.client_id)
                     self.transport.sendto(pkt, addr)
                 for addr in inactive:
                     del self.sessions[addr]
@@ -314,7 +454,19 @@ async def handle_client_config(request: Request):
     # Server Address Overrides map regions to this server's host or game nodes
     return JSONResponse(content={
         "ServerAddressOverrides": {
+            "US_EAST": SERVER_PUBLIC_IP,
+            "US_WEST": SERVER_PUBLIC_IP,
             "EU": SERVER_PUBLIC_IP,
+            "EAST_ASIA": SERVER_PUBLIC_IP,
+            "SOUTH_ASIA": SERVER_PUBLIC_IP,
+            "SOUTH_AMERICA": SERVER_PUBLIC_IP,
+            "AUSTRALIA": SERVER_PUBLIC_IP,
+            "JAPAN": SERVER_PUBLIC_IP,
+            "MIDDLE_EAST": SERVER_PUBLIC_IP,
+            "SOUTH_AFRICA": SERVER_PUBLIC_IP,
+            "INDIA": SERVER_PUBLIC_IP,
+            "DEBUG": SERVER_PUBLIC_IP,
+            "DEBUG_GLOBAL": SERVER_PUBLIC_IP,
             "EUROPE": SERVER_PUBLIC_IP
         },
         "ClanAllies": [],
