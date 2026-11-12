@@ -72,6 +72,36 @@ def build_leaderboard(client_id: int) -> bytes:
     return bio.getvalue()
 
 
+def build_custom_rooms(client_id: int, offset: int = 0) -> bytes:
+    bio = io.BytesIO()
+    bio.write(struct.pack(">Bi", 0x2d, client_id))
+    if offset == 0:
+        bio.write(struct.pack(">B", 2)) # 2 rooms
+        # Room 1: FFA
+        bio.write(struct.pack(">iBBBh", 1, 1, 0, 20, 1)) # id=1, mode=1, flags=0, max=20, cur=1
+        # Room 2: Teams
+        bio.write(struct.pack(">iBBBh", 2, 2, 0, 20, 1)) # id=2, mode=2, flags=0, max=20, cur=1
+    else:
+        bio.write(struct.pack(">B", 0)) # No more rooms
+    return bio.getvalue()
+
+
+def build_clan_info(client_id: int) -> bytes:
+    bio = io.BytesIO()
+    bio.write(struct.pack(">Bi", 0x43, client_id))
+    bio.write(b"\x00\x00") # empty string UTF
+    bio.write(struct.pack(">iBB", 0, 0, 0)) # h=0, byte=0, count=0
+    return bio.getvalue()
+
+
+def build_tournament_list(client_id: int) -> bytes:
+    return struct.pack(">BiBi", 0x18, client_id, 0, 0)
+
+
+def build_clan_status(client_id: int) -> bytes:
+    return struct.pack(">Biib", 0x12, client_id, -1, 0)
+
+
 class ClientSession:
     def __init__(self, addr, client_id):
         self.addr = addr
@@ -127,9 +157,6 @@ class NebulousUDPServerProtocol(asyncio.DatagramProtocol):
                 self.sessions[addr] = session
 
                 # Send ConnectResult2 (packet 1, SUCCESS=0)
-                # Struct: 1 (int8), client_id (int32), result=0 (int8: SUCCESS),
-                # public_id=100 (int32), private_id=100 (int32), game_id=1 (int32),
-                # ban_length=0 (int32), ad_stuff=1.0 (float32), split_multiplier=1 (int8)
                 resp = struct.pack(">BiBiiiifb", 1, client_id, 0, 100, 100, 1, 0, 1.0, 1)
                 self.transport.sendto(resp, addr)
                 logger.info(f"Sent ConnectResult2 (SUCCESS) to {addr}")
@@ -153,16 +180,90 @@ class NebulousUDPServerProtocol(asyncio.DatagramProtocol):
                 logger.error(f"Error handling connect packet: {e}", exc_info=True)
             return
 
-        # 4. KEEP_ALIVE (0x7f = 127)
+        # 4. CUSTOM ROOMS REQUEST (0x21 = 33)
+        if pkt_type == 0x21:
+            offset = 0
+            client_id = 10001
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+                client_id = self.sessions[addr].client_id
+            elif len(data) >= 5:
+                client_id = struct.unpack(">i", data[1:5])[0]
+            
+            if len(data) >= 7:
+                offset = struct.unpack(">h", data[5:7])[0]
+
+            resp = build_custom_rooms(client_id, offset)
+            self.transport.sendto(resp, addr)
+            logger.info(f"Responded to 0x21 with room list (0x2d) to {addr} (offset={offset})")
+            return
+
+        # 5. TEAM ROOMS / CLAN WAR INFO (0x42 = 66)
+        if pkt_type == 0x42:
+            client_id = 10001
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+                client_id = self.sessions[addr].client_id
+            elif len(data) >= 5:
+                client_id = struct.unpack(">i", data[1:5])[0]
+
+            resp = build_clan_info(client_id)
+            self.transport.sendto(resp, addr)
+            logger.info(f"Responded to 0x42 with 0x43 (Clan/Team info) to {addr}")
+            return
+
+        # 6. TOURNAMENT / ARENA LIST (0x17 = 23)
+        if pkt_type == 0x17:
+            client_id = 10001
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+                client_id = self.sessions[addr].client_id
+            elif len(data) >= 5:
+                client_id = struct.unpack(">i", data[1:5])[0]
+
+            resp = build_tournament_list(client_id)
+            self.transport.sendto(resp, addr)
+            logger.info(f"Responded to 0x17 with 0x18 (Tournament list) to {addr}")
+            return
+
+        # 7. CLAN LIST (0x11 = 17)
+        if pkt_type == 0x11:
+            client_id = 10001
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+                client_id = self.sessions[addr].client_id
+            elif len(data) >= 5:
+                client_id = struct.unpack(">i", data[1:5])[0]
+
+            resp = build_clan_status(client_id)
+            self.transport.sendto(resp, addr)
+            logger.info(f"Responded to 0x11 with 0x12 (Clan list) to {addr}")
+            return
+
+        # 8. KEEPALIVE PING (0x07 = 7)
+        if pkt_type == 0x07:
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+            self.transport.sendto(data, addr)
+            return
+
+        # 9. KEEP_ALIVE (0x7f = 127)
         if pkt_type == 0x7F:
             if addr in self.sessions:
                 self.sessions[addr].last_seen = time.time()
             return
 
-        # 5. Any other game packet (spawn 0x1d, move 0x20, split, eject)
+        # 10. SPAWN REQUEST (0x1d = 29)
+        if pkt_type == 0x1D:
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+                logger.info(f"Spawn requested by {addr}")
+            return
+
+        # 11. PLAYER INPUT (0x02 = 2) or other packets
         if addr in self.sessions:
             self.sessions[addr].last_seen = time.time()
-            logger.info(f"Received Game Packet 0x{pkt_type:02x} ({len(data)} bytes) from {addr}")
+            logger.debug(f"Received Game Packet 0x{pkt_type:02x} ({len(data)} bytes) from {addr}")
 
     async def game_loop(self):
         """Sends periodic game updates to all active sessions (20 FPS)."""
