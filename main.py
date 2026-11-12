@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("nebulous_server")
 
 # Game server configuration
-SERVER_PUBLIC_IP = os.environ.get("SERVER_PUBLIC_IP", "127.0.0.1")
+SERVER_PUBLIC_IP = os.environ.get("SERVER_PUBLIC_IP", "nebulous-server.onrender.com")
 SERVER_PUBLIC_UDP_PORT = int(os.environ.get("SERVER_PUBLIC_UDP_PORT", 25000))
 APP_DOMAIN = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "localhost")
 

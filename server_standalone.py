@@ -18,7 +18,7 @@ from socketserver import ThreadingMixIn
 PORT = int(os.environ.get("PORT", 8000))
 MONGODB_URI = os.environ.get("MONGODB_URI", "")
 DB_NAME = os.environ.get("DB_NAME", "nebulous_db")
-SERVER_PUBLIC_IP = os.environ.get("SERVER_PUBLIC_IP", "127.0.0.1")
+SERVER_PUBLIC_IP = os.environ.get("SERVER_PUBLIC_IP", "nebulous-server.onrender.com")
 SERVER_PUBLIC_UDP_PORT = int(os.environ.get("SERVER_PUBLIC_UDP_PORT", 25000))
 
 # Database connection
