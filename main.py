@@ -21,24 +21,139 @@ SERVER_PUBLIC_UDP_PORT = int(os.environ.get("SERVER_PUBLIC_UDP_PORT", 25000))
 APP_DOMAIN = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "localhost")
 
 
+def build_game_config(client_id: int) -> bytes:
+    import io
+    bio = io.BytesIO()
+    # 0x2b (43) GAME_CONFIG
+    bio.write(struct.pack(">Bi", 0x2b, client_id))
+    bio.write(struct.pack(">i", 1)) # room ID
+    bio.write(b"\x00") # d = False
+    bio.write(b"\x00") # p = False
+    bio.write(b"\x01") # s = True
+    bio.write(struct.pack(">i", 1)) # t
+    bio.write(struct.pack(">i", 0)) # u
+    bio.write(b"\x00") # v = False
+    bio.write(b"\x01") # y = True
+    bio.write(b"\x00") # z
+    bio.write(struct.pack(">i", 0)) # A
+    bio.write(b"\x01") # B = True
+    bio.write(struct.pack(">B", 1)) # C
+    bio.write(struct.pack(">i", 0)) # D
+    bio.write(b"\x00") # E = False (skip hashsets)
+    bio.write(b"\x00") # S = False
+    bio.write(b"\x00") # U = False
+    bio.write(b"\x00") # W = False
+    return bio.getvalue()
+
+
+def build_game_update(seq: int) -> bytes:
+    import io
+    bio = io.BytesIO()
+    bio.write(struct.pack(">B", 0x16))
+    bio.write(struct.pack(">BB", seq & 0xFF, (seq >> 8) & 0xFF))
+    bio.write(struct.pack(">f", 1.0))
+    bio.write(b"\x00")
+    bio.write(struct.pack(">B", 0))
+    bio.write(b"\x80\x80")
+    bio.write(b"\x00" * 10)
+    return bio.getvalue()
+
+
+class ClientSession:
+    def __init__(self, addr, client_id):
+        self.addr = addr
+        self.client_id = client_id
+        import time
+        self.last_seen = time.time()
+        self.seq = 0
+
+
 class NebulousUDPServerProtocol(asyncio.DatagramProtocol):
+    def __init__(self):
+        self.transport = None
+        self.sessions = {}
+        self.update_task = None
+
     def connection_made(self, transport):
         self.transport = transport
         logger.info(f"Nebulous European UDP Game Node active on port {SERVER_PUBLIC_UDP_PORT}")
+        self.update_task = asyncio.create_task(self.game_loop())
 
     def datagram_received(self, data, addr):
         if not data:
             return
-        try:
-            # Nebulous connect handshake responder
-            # CONNECT_RESULT_2 (packet_type=1)
-            # Struct: 1 (int8), client_id (int32), result=0 (int8: SUCCESS),
-            # public_id=100 (int32), private_id=100 (int32), game_id=1 (int32),
-            # ban_length=0 (int32), ad_stuff=0.0 (float32), split_multiplier=1 (int8)
-            resp = struct.pack(">BiBiiiifb", 1, 1, 0, 100, 100, 1, 0, 0.0, 1)
-            self.transport.sendto(resp, addr)
-        except Exception as e:
-            logger.debug(f"UDP datagram handling error: {e}")
+        import time
+        pkt_type = data[0]
+
+        # 1. PING (0x75)
+        if pkt_type == 0x75 or (len(data) == 4 and data[0] == 0x75):
+            self.transport.sendto(b"\x76\x00\x00\x00\x00", addr)
+            return
+
+        # 2. CHALLENGE (0x85)
+        if pkt_type in (0x85, 256 - 0x7B):
+            self.transport.sendto(b"\x86\x01\x02\x03\x04", addr)
+            logger.info(f"Challenge received from {addr}, sent 0x86 cookie")
+            return
+
+        # 3. CONNECT (0x7d)
+        if pkt_type == 0x7D:
+            try:
+                cookie_len = data[5] if len(data) > 5 else 4
+                cid_offset = 6 + cookie_len + 2
+                client_id = 10001
+                if len(data) >= cid_offset + 4:
+                    client_id = struct.unpack(">i", data[cid_offset:cid_offset + 4])[0]
+
+                logger.info(f"Connect handshake from {addr} (client_id={client_id})")
+                self.sessions[addr] = ClientSession(addr, client_id)
+
+                # ConnectResult2 (SUCCESS)
+                resp = struct.pack(">BiBiiiifb", 1, client_id, 0, 100, 100, 1, 0, 1.0, 1)
+                self.transport.sendto(resp, addr)
+
+                # GameConfig (0x2b)
+                config_pkt = build_game_config(client_id)
+                self.transport.sendto(config_pkt, addr)
+                logger.info(f"Sent ConnectResult2 & GameConfig to {addr}")
+            except Exception as e:
+                logger.error(f"Connect packet error: {e}")
+            return
+
+        # 4. KEEP_ALIVE (0x7f)
+        if pkt_type == 0x7F:
+            if addr in self.sessions:
+                self.sessions[addr].last_seen = time.time()
+            return
+
+        # 5. Other game packets
+        if addr in self.sessions:
+            self.sessions[addr].last_seen = time.time()
+
+    async def game_loop(self):
+        import time
+        while True:
+            try:
+                await asyncio.sleep(0.05)
+                now = time.time()
+                inactive = []
+                for addr, session in list(self.sessions.items()):
+                    if now - session.last_seen > 30.0:
+                        inactive.append(addr)
+                        continue
+                    session.seq = (session.seq + 1) & 0xFFFF
+                    pkt = build_game_update(session.seq)
+                    self.transport.sendto(pkt, addr)
+                for addr in inactive:
+                    del self.sessions[addr]
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                pass
+
+    def connection_lost(self, exc):
+        if self.update_task:
+            self.update_task.cancel()
 
 
 @asynccontextmanager
